@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LUT Apply — Full Preview</title>
+<style>
+  :root {
+    --accent: #0077ff;
+    --border: #ccc;
+    --bg: #f7f7f7;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: black;
+    color: white;
+    font-family: system-ui, sans-serif;
+  }
+
+  /* --- control bar --- */
+  header {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: rgba(20,20,20,0.8);
+    backdrop-filter: blur(4px);
+    padding: 0.75rem 1rem;
+    z-index: 20;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+  }
+
+  header input[type=file],
+  header select,
+  header input[type=range] {
+    background: rgba(255,255,255,0.1);
+    border: 1px solid var(--border);
+    color: white;
+    border-radius: 6px;
+    padding: 0.3rem 0.5rem;
+  }
+
+  header option {
+    color: black;
+  }
+
+  button {
+    padding: 0.4rem 1rem;
+    border: none;
+    border-radius: 6px;
+    background: var(--accent);
+    color: white;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  button:disabled { opacity: .5; cursor: default; }
+
+  #status {
+    color: #aaa;
+    font-size: 0.9rem;
+  }
+
+  /* --- main preview area --- */
+  main {
+    height: 100vh;
+    width: 100%;
+    overflow: hidden;
+    position: relative;
+  }
+
+  #out {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    background: #111;
+  }
+
+  /* --- original thumbnail --- */
+  #orig {
+    position: absolute;
+    bottom: 1rem;
+    right: 1rem;
+    width: 200px;
+    border: 2px solid white;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+    z-index: 10;
+    cursor: grab;
+  }
+
+  #orig:active {
+    cursor: grabbing;
+  }
+
+  /* smaller screens: move the thumb up */
+  @media (max-width: 600px) {
+    #orig { width: 120px; bottom: 0.5rem; right: 0.5rem; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <input id="file" type="file" accept="image/*">
+  <select id="lut" disabled></select>
+  <label>
+    Intensity:
+    <input id="intensity" type="range" min="0" max="1" step="0.01" value="1">
+    <span id="intensityVal">1.00</span>
+  </label>
+  <button id="process" disabled>Apply LUT</button>
+  <span id="status"></span>
+
+<label>
+  Tags:
+  <input id="tags" type="text" placeholder="comma, separated, tags">
+</label>
+
+
+</header>
+
+<main>
+  <img id="out" alt="Processed image">
+  <img id="orig" alt="Original thumbnail">
+</main>
+
+<script>
+(async function init(){
+  async function loadLUTs(){
+    const res = await fetch('/luts');
+    if (!res.ok) throw new Error('Failed to load LUT list');
+    const data = await res.json();
+    const sel = document.getElementById('lut');
+    sel.innerHTML = '';
+    if (!data.luts || data.luts.length === 0) {
+      sel.innerHTML = '<option>No LUTs found</option>';
+      sel.disabled = true;
+    } else {
+      sel.disabled = false;
+      data.luts.forEach(n=>{
+        const o = document.createElement('option');
+        o.value = n; o.textContent = n;
+        sel.appendChild(o);
+      });
+    }
+  }
+
+  await loadLUTs();
+
+  const fileInput = document.getElementById('file');
+  const processBtn = document.getElementById('process');
+  const statusEl = document.getElementById('status');
+  const origImg = document.getElementById('orig');
+  const outImg  = document.getElementById('out');
+  const intensity = document.getElementById('intensity');
+  const intensityVal = document.getElementById('intensityVal');
+  const tagsInput = document.getElementById('tags');
+
+  intensity.addEventListener('input', () => {
+    intensityVal.textContent = Number(intensity.value).toFixed(2);
+  });
+
+  fileInput.addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    if (f) {
+      origImg.src = URL.createObjectURL(f);
+      processBtn.disabled = false;
+    } else {
+      origImg.removeAttribute('src');
+      processBtn.disabled = true;
+    }
+  });
+
+  processBtn.addEventListener('click', async () => {
+    const f = fileInput.files[0];
+    const lut = document.getElementById('lut').value;
+    if (!f || !lut) return;
+    statusEl.textContent = 'Processing…';
+    processBtn.disabled = true;
+    try {
+      const fd = new FormData();
+      fd.append('image', f);
+      fd.append('lut', lut);
+      fd.append('intensity', intensity.value);
+      fd.append('tags', (tagsInput.value || '').trim());   // <= new
+      const res = await fetch('/process', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || ('HTTP ' + res.status));
+      }
+      const blob = await res.blob();
+      outImg.src = URL.createObjectURL(blob);
+      statusEl.textContent = 'Done';
+    } catch (e) {
+      statusEl.textContent = 'Error: ' + e.message;
+    } finally {
+      processBtn.disabled = false;
+    }
+  });
+
+  // simple drag to reposition the original thumbnail
+  let isDragging=false, startX, startY, origX, origY;
+  origImg.addEventListener('mousedown', e=>{
+    isDragging=true;
+    startX=e.clientX; startY=e.clientY;
+    const rect=origImg.getBoundingClientRect();
+    origX=rect.left; origY=rect.top;
+  });
+  document.addEventListener('mouseup', ()=>isDragging=false);
+  document.addEventListener('mousemove', e=>{
+    if(!isDragging) return;
+    const dx=e.clientX-startX, dy=e.clientY-startY;
+    origImg.style.left = (origX+dx)+'px';
+    origImg.style.top  = (origY+dy)+'px';
+    origImg.style.right='auto';
+    origImg.style.bottom='auto';
+  });
+})();
+</script>
+</body>
+</html>
+
