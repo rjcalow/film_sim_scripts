@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(command -v zenity)",
-      "Bash(command -v yad)"
-    ]
-  }
-}
